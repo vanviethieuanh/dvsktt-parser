@@ -1,3 +1,5 @@
+from typing import List
+
 class NoteReference:
     def __init__(self, part: int, volume: int, era: int, block: int, pos: int, note: str):
         self.part = part

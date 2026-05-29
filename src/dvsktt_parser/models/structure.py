@@ -1,4 +1,5 @@
 from typing import List
+from .blocks import Block
 
 class Part:
     def __init__(self, index: int):
@@ -19,7 +20,7 @@ class Volume:
 class Era:
     def __init__(self, index: int):
         self.index = index
-        self.blocks: List['Block'] = []
+        self.blocks: List[Block] = []
 
-    def add_block(self, block: 'Block'):
+    def add_block(self, block: Block):
         self.blocks.append(block)
