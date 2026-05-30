@@ -1,5 +1,8 @@
 # Parser Implementation Plan
 
+- DO NOT update this plan or any other plan in this `plan` directory.
+- DO NOT update make any modification on the `data` directory.
+
 ## 1. Data Structure Understanding
 
 The source text maps to the existing Python models as a hierarchical tree.
