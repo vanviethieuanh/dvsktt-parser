@@ -216,6 +216,21 @@ def is_reign_marker(line: str) -> bool:
     return is_mostly_title_cased(cleaned)
 
 
+def remove_inline_footnote_numbers(text: str) -> str:
+    """Remove inline numeric footnote markers attached to words or directly after closing brackets.
+
+    We intentionally only remove digit runs that are preceded by a letter (word character
+    excluding digits) or a closing bracket. This avoids stripping numbers that are part of
+    years, ranges, counts, or other legitimate numeric content (e.g. "50", "[1063-1026]").
+
+    Examples:
+      - "châu3" -> "châu"
+      - "gọi [5a]7 người" -> "gọi [5a] người"
+    """
+    # Lookbehind asserts the char before the digits is either a letter (not digit) or a closing bracket.
+    return re.sub(r"(?<=(?:[^\d\W]|\]))\d+(?!\d)", "", text)
+
+
 def find_last_block_in_doc(doc: Document) -> Optional[Tuple[int, int, int, int, Block]]:
     """Finds the last block created in the document."""
     if not doc.parts:
@@ -459,5 +474,13 @@ def parse_document(pages_text: List[str]) -> Document:
         # Link footnotes for the page
         if footnote_dict:
             link_footnotes_for_page(doc, page_blocks, footnote_dict)
+
+        # Remove inline footnote numeric markers from blocks on the page.
+        # We perform this after linking so that note positions (pos) are computed based on the
+        # original text with the numbers present. Removing the digits afterwards keeps pos as
+        # the insertion point where the note should be attached.
+        for p_idx, v_idx, e_idx, b_idx, block_obj in page_blocks:
+            if hasattr(block_obj, "text") and block_obj.text:
+                block_obj.text = remove_inline_footnote_numbers(block_obj.text)
 
     return doc
