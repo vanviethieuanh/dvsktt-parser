@@ -164,7 +164,8 @@ def parse_page_content(page_string: str) -> Tuple[List[str], Dict[int, str]]:
     body_lines = cleaned_lines[:split_idx]
     fn_lines = cleaned_lines[split_idx:]
 
-    clean_body = [l.strip() for l in body_lines if l.strip()]
+    # Keep empty lines to represent paragraph boundaries!
+    clean_body = [l.strip() for l in body_lines]
     footnote_dict = extract_footnotes(fn_lines)
 
     return clean_body, footnote_dict
@@ -190,6 +191,9 @@ def is_reign_marker(line: str) -> bool:
     if not line:
         return False
     if len(line) >= 50:
+        return False
+    # Rulers do not have commas in their name!
+    if "," in line:
         return False
     cleaned = re.sub(r"\d+$", "", line).strip()
     if any(cleaned.endswith(p) for p in [".", ",", ";", ":", "?", "!", ")", "]"]):
@@ -305,19 +309,60 @@ def parse_document(pages_text: List[str]) -> Document:
 
     for i, page_string in enumerate(pages_text):
         body_lines, footnote_dict = parse_page_content(page_string)
-        page_blocks = []
 
-        for line in body_lines:
-            # 1. Part check
-            if (
-                line.startswith("Đại Việt Sử Ký")
-                and "-" not in line
+        # First Pass: Classify lines on this page
+        classified = []
+        for l in body_lines:
+            if not l:
+                classified.append(("EMPTY", ""))
+            elif (
+                l.startswith("Đại Việt Sử Ký")
+                and "-" not in l
                 and any(
-                    line.endswith(suffix)
+                    l.endswith(suffix)
                     for suffix in ["Toàn Thư", "Thực Lục", "Tục Biên"]
                 )
-                and ("Ngoại Kỷ" in line or "Bản Kỷ" in line)
+                and ("Ngoại Kỷ" in l or "Bản Kỷ" in l)
             ):
+                classified.append(("PART", l))
+            elif re.match(r"^Quyển\s+[IVXLCDM]+\d*$", l):
+                classified.append(("VOLUME", l))
+            elif (
+                l.startswith("Kỷ ")
+                and len(l) < 50
+                and not (
+                    re.match(r"^Kỷ\s+(Hợi|Tỵ|Sửu|Mùi|Mão|Dậu)([,\[]|$)", l)
+                    or (
+                        len(l.split()) >= 2
+                        and ("," in l.split()[1] or "[" in l.split()[1])
+                    )
+                )
+            ):
+                classified.append(("ERA", l))
+            elif is_reign_marker(l):
+                classified.append(("REIGN_MARKER", l))
+            else:
+                classified.append(("RECORD", l))
+
+        # Second Pass: Group consecutive records (joining lines in the same paragraph)
+        grouped = []
+        curr_record_lines = []
+        for item_type, text in classified:
+            if item_type == "RECORD":
+                curr_record_lines.append(text)
+            else:
+                if curr_record_lines:
+                    grouped.append(("RECORD", " ".join(curr_record_lines).strip()))
+                    curr_record_lines = []
+                if item_type != "EMPTY":
+                    grouped.append((item_type, text))
+        if curr_record_lines:
+            grouped.append(("RECORD", " ".join(curr_record_lines).strip()))
+
+        # Third Pass: Core state machine over grouped items
+        page_blocks = []
+        for item_type, line in grouped:
+            if item_type == "PART":
                 name = "Ngoại Kỷ" if "Ngoại Kỷ" in line else "Bản Kỷ"
 
                 part = None
@@ -339,19 +384,12 @@ def parse_document(pages_text: List[str]) -> Document:
                 vol_idx = -1
                 era_idx = -1
                 block_idx = -1
-                continue
 
-            if active_part is None:
+            elif active_part is None:
                 # Skip front matter before the first Part header is encountered
                 continue
 
-            # 2. Volume check
-            elif re.match(r"^Quyển\s+[IVXLCDM]+\d*$", line):
-                if active_part is None:
-                    part_idx = 0
-                    active_part = Part(index=0, name="Ngoại Kỷ")
-                    doc.add_part(active_part)
-
+            elif item_type == "VOLUME":
                 vol_idx = len(active_part.volumes)
                 active_vol = Volume(index=vol_idx, name=line)
                 active_part.add_volume(active_vol)
@@ -360,22 +398,7 @@ def parse_document(pages_text: List[str]) -> Document:
                 era_idx = -1
                 block_idx = -1
 
-            # 3. Era check
-            elif (
-                line.startswith("Kỷ ")
-                and len(line) < 50
-                and not (
-                    re.match(r"^Kỷ\s+(Hợi|Tỵ|Sửu|Mùi|Mão|Dậu)([,\[]|$)", line)
-                    or (
-                        len(line.split()) >= 2
-                        and ("," in line.split()[1] or "[" in line.split()[1])
-                    )
-                )
-            ):
-                if active_part is None:
-                    part_idx = 0
-                    active_part = Part(index=0, name="Ngoại Kỷ")
-                    doc.add_part(active_part)
+            elif item_type == "ERA":
                 if active_vol is None:
                     vol_idx = len(active_part.volumes)
                     active_vol = Volume(index=vol_idx, name="Quyển I")
@@ -391,12 +414,7 @@ def parse_document(pages_text: List[str]) -> Document:
                     active_reign_marker = None
                     block_idx = -1
 
-            # 4. ReignMarker check
-            elif is_reign_marker(line):
-                if active_part is None:
-                    part_idx = 0
-                    active_part = Part(index=0, name="Ngoại Kỷ")
-                    doc.add_part(active_part)
+            elif item_type == "REIGN_MARKER":
                 if active_vol is None:
                     vol_idx = len(active_part.volumes)
                     active_vol = Volume(index=vol_idx, name="Quyển I")
@@ -415,12 +433,7 @@ def parse_document(pages_text: List[str]) -> Document:
                     (part_idx, vol_idx, era_idx, block_idx, active_reign_marker)
                 )
 
-            # 5. Record
-            else:
-                if active_part is None:
-                    part_idx = 0
-                    active_part = Part(index=0, name="Ngoại Kỷ")
-                    doc.add_part(active_part)
+            elif item_type == "RECORD":
                 if active_vol is None:
                     vol_idx = len(active_part.volumes)
                     active_vol = Volume(index=vol_idx, name="Quyển I")
